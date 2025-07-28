@@ -1,9 +1,11 @@
+require('dotenv').config();
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const db = require('./database');
+const Joi = require('joi');
 const router = express.Router();
 
-require('dotenv').config();
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_dev_only';
 
 // Middleware pour vérifier l'authentification
@@ -56,23 +58,42 @@ router.post('/', authenticateToken, (req, res) => {
   );
 });
 
-// Lister les notes de l'utilisateur
+// Lister les notes de l'utilisateur + notes partagées avec moi
 router.get('/', authenticateToken, (req, res) => {
   const userId = req.user.userId;
+  const userEmail = req.user.email;
   const { search, status } = req.query;
 
-  let query = 'SELECT * FROM notes WHERE user_id = ?';
-  let params = [userId];
+  // Query pour mes notes + notes partagées avec moi
+  let query = `
+    SELECT n.*, u.email as owner_email, 'own' as source
+    FROM notes n 
+    JOIN users u ON n.user_id = u.id
+    WHERE n.user_id = ?
+    
+    UNION ALL
+    
+    SELECT n.*, u.email as owner_email, 'shared' as source
+    FROM notes n 
+    JOIN users u ON n.user_id = u.id
+    JOIN note_shares ns ON n.id = ns.note_id
+    WHERE ns.shared_with_email = ?
+  `;
+  
+  let params = [userId, userEmail];
 
-  // Filtrer par statut
+  // Filtrer par statut si spécifié
   if (status && ['private', 'shared', 'public'].includes(status)) {
-    query += ' AND status = ?';
+    query = `SELECT * FROM (${query}) WHERE status = ?`;
     params.push(status);
   }
 
   // Recherche par titre ou tags
   if (search) {
-    query += ' AND (title LIKE ? OR tags LIKE ?)';
+    const searchCondition = status ? 
+      ' AND (title LIKE ? OR tags LIKE ?)' : 
+      ` WHERE title LIKE ? OR tags LIKE ?`;
+    query += searchCondition;
     params.push(`%${search}%`, `%${search}%`);
   }
 
@@ -80,6 +101,7 @@ router.get('/', authenticateToken, (req, res) => {
 
   db.all(query, params, (err, notes) => {
     if (err) {
+      console.error('Erreur SQL:', err);
       return res.status(500).json({ error: 'Erreur lors de la récupération des notes' });
     }
     res.json(notes);
@@ -90,25 +112,31 @@ router.get('/', authenticateToken, (req, res) => {
 router.get('/:id', authenticateToken, (req, res) => {
   const noteId = req.params.id;
   const userId = req.user.userId;
+  const userEmail = req.user.email;
 
-  db.get(
-    'SELECT * FROM notes WHERE id = ? AND user_id = ?',
-    [noteId, userId],
-    (err, note) => {
-      if (err) {
-        return res.status(500).json({ error: 'Erreur de base de données' });
-      }
-
-      if (!note) {
-        return res.status(404).json({ error: 'Note non trouvée' });
-      }
-
-      res.json(note);
+  // Vérifier si l'utilisateur peut accéder à cette note
+  db.get(`
+    SELECT n.*, u.email as owner_email
+    FROM notes n 
+    JOIN users u ON n.user_id = u.id
+    WHERE n.id = ? AND (
+      n.user_id = ? OR 
+      EXISTS(SELECT 1 FROM note_shares WHERE note_id = ? AND shared_with_email = ?)
+    )
+  `, [noteId, userId, noteId, userEmail], (err, note) => {
+    if (err) {
+      return res.status(500).json({ error: 'Erreur de base de données' });
     }
-  );
+
+    if (!note) {
+      return res.status(404).json({ error: 'Note non trouvée' });
+    }
+
+    res.json(note);
+  });
 });
 
-// Modifier une note
+// Modifier une note (seulement le propriétaire)
 router.put('/:id', authenticateToken, (req, res) => {
   const noteId = req.params.id;
   const userId = req.user.userId;
@@ -132,7 +160,7 @@ router.put('/:id', authenticateToken, (req, res) => {
       }
 
       if (this.changes === 0) {
-        return res.status(404).json({ error: 'Note non trouvée' });
+        return res.status(404).json({ error: 'Note non trouvée ou non autorisée' });
       }
 
       res.json({ message: 'Note modifiée avec succès' });
@@ -140,7 +168,7 @@ router.put('/:id', authenticateToken, (req, res) => {
   );
 });
 
-// Supprimer une note
+// Supprimer une note (seulement le propriétaire)
 router.delete('/:id', authenticateToken, (req, res) => {
   const noteId = req.params.id;
   const userId = req.user.userId;
@@ -166,10 +194,10 @@ router.delete('/:id', authenticateToken, (req, res) => {
 router.post('/:id/share', authenticateToken, (req, res) => {
   const noteId = req.params.id;
   const userId = req.user.userId;
-  const { sharedWithEmail } = req.body;
+  const { email } = req.body;
 
-  if (!sharedWithEmail) {
-    return res.status(400).json({ error: 'Email de partage requis' });
+  if (!email) {
+    return res.status(400).json({ error: 'Email requis' });
   }
 
   // Vérifier que la note appartient à l'utilisateur
@@ -185,47 +213,32 @@ router.post('/:id/share', authenticateToken, (req, res) => {
         return res.status(404).json({ error: 'Note non trouvée' });
       }
 
-      // Trouver l'utilisateur avec qui partager
+      // Vérifier que l'utilisateur cible existe
       db.get(
         'SELECT id FROM users WHERE email = ?',
-        [sharedWithEmail],
-        (err, sharedUser) => {
+        [email],
+        (err, targetUser) => {
           if (err) {
             return res.status(500).json({ error: 'Erreur de base de données' });
           }
 
-          if (!sharedUser) {
+          if (!targetUser) {
             return res.status(404).json({ error: 'Utilisateur non trouvé' });
           }
 
-          // Vérifier si déjà partagé
-          db.get(
-            'SELECT * FROM shares WHERE note_id = ? AND shared_with_user_id = ?',
-            [noteId, sharedUser.id],
-            (err, existingShare) => {
+          // Créer le partage
+          db.run(
+            'INSERT OR REPLACE INTO note_shares (note_id, shared_with_email, shared_by_user_id) VALUES (?, ?, ?)',
+            [noteId, email, userId],
+            function(err) {
               if (err) {
-                return res.status(500).json({ error: 'Erreur de base de données' });
+                return res.status(500).json({ error: 'Erreur lors du partage' });
               }
 
-              if (existingShare) {
-                return res.status(400).json({ error: 'Note déjà partagée avec cet utilisateur' });
-              }
-
-              // Créer le partage
-              db.run(
-                'INSERT INTO shares (note_id, shared_with_user_id) VALUES (?, ?)',
-                [noteId, sharedUser.id],
-                function(err) {
-                  if (err) {
-                    return res.status(500).json({ error: 'Erreur lors du partage' });
-                  }
-
-                  res.json({ 
-                    message: `Note partagée avec ${sharedWithEmail}`,
-                    shareId: this.lastID
-                  });
-                }
-              );
+              res.json({
+                message: `Note partagée avec succès avec ${email}`,
+                shareId: this.lastID
+              });
             }
           );
         }
@@ -234,29 +247,12 @@ router.post('/:id/share', authenticateToken, (req, res) => {
   );
 });
 
-// Lister les notes partagées AVEC moi
-router.get('/shared-with-me', authenticateToken, (req, res) => {
-  const userId = req.user.userId;
-
-  db.all(`
-    SELECT n.*, u.email as owner_email, s.created_at as shared_at
-    FROM notes n
-    JOIN shares s ON n.id = s.note_id
-    JOIN users u ON n.user_id = u.id
-    WHERE s.shared_with_user_id = ?
-    ORDER BY s.created_at DESC
-  `, [userId], (err, notes) => {
-    if (err) {
-      return res.status(500).json({ error: 'Erreur lors de la récupération' });
-    }
-    res.json(notes);
-  });
-});
-
-// Générer un lien public pour une note
+// Générer un lien public
 router.post('/:id/public-link', authenticateToken, (req, res) => {
   const noteId = req.params.id;
   const userId = req.user.userId;
+  
+  const publicToken = crypto.randomBytes(32).toString('hex');
 
   // Vérifier que la note appartient à l'utilisateur
   db.get(
@@ -271,20 +267,19 @@ router.post('/:id/public-link', authenticateToken, (req, res) => {
         return res.status(404).json({ error: 'Note non trouvée' });
       }
 
-      // Mettre à jour le statut de la note en public
+      // Mettre à jour la note avec le token public
       db.run(
-        'UPDATE notes SET status = ? WHERE id = ?',
-        ['public', noteId],
+        'UPDATE notes SET public_token = ?, status = ? WHERE id = ?',
+        [publicToken, 'public', noteId],
         function(err) {
           if (err) {
-            return res.status(500).json({ error: 'Erreur lors de la mise à jour' });
+            return res.status(500).json({ error: 'Erreur lors de la génération du lien' });
           }
 
-          const publicUrl = `${req.protocol}://${req.get('host')}/api/notes/public/${noteId}`;
-          res.json({ 
-            message: 'Lien public généré',
-            publicUrl: publicUrl,
-            noteId: noteId
+          res.json({
+            message: 'Lien public généré avec succès',
+            publicLink: `http://localhost:3000/public/${publicToken}`,
+            token: publicToken
           });
         }
       );
@@ -292,16 +287,13 @@ router.post('/:id/public-link', authenticateToken, (req, res) => {
   );
 });
 
-// Accéder à une note publique (sans authentification)
-router.get('/public/:id', (req, res) => {
-  const noteId = req.params.id;
+// Accéder à une note via lien public (SANS authentification)
+router.get('/public/:token', (req, res) => {
+  const token = req.params.token;
 
   db.get(
-    `SELECT n.*, u.email as owner_email 
-     FROM notes n 
-     JOIN users u ON n.user_id = u.id 
-     WHERE n.id = ? AND n.status = 'public'`,
-    [noteId],
+    'SELECT n.*, u.email as owner_email FROM notes n JOIN users u ON n.user_id = u.id WHERE n.public_token = ? AND n.status = "public"',
+    [token],
     (err, note) => {
       if (err) {
         return res.status(500).json({ error: 'Erreur de base de données' });
@@ -316,7 +308,7 @@ router.get('/public/:id', (req, res) => {
   );
 });
 
-// Lister les utilisateurs avec qui une note est partagée
+// Lister les partages d'une note
 router.get('/:id/shares', authenticateToken, (req, res) => {
   const noteId = req.params.id;
   const userId = req.user.userId;
@@ -335,18 +327,21 @@ router.get('/:id/shares', authenticateToken, (req, res) => {
       }
 
       // Lister les partages
-      db.all(`
-        SELECT s.id, u.email, s.created_at
-        FROM shares s
-        JOIN users u ON s.shared_with_user_id = u.id
-        WHERE s.note_id = ?
-        ORDER BY s.created_at DESC
-      `, [noteId], (err, shares) => {
-        if (err) {
-          return res.status(500).json({ error: 'Erreur lors de la récupération' });
+      db.all(
+        'SELECT * FROM note_shares WHERE note_id = ? ORDER BY created_at DESC',
+        [noteId],
+        (err, shares) => {
+          if (err) {
+            return res.status(500).json({ error: 'Erreur lors de la récupération des partages' });
+          }
+
+          res.json({
+            note: note,
+            shares: shares,
+            publicLink: note.public_token ? `http://localhost:3000/public/${note.public_token}` : null
+          });
         }
-        res.json(shares);
-      });
+      );
     }
   );
 });

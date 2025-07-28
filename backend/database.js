@@ -17,7 +17,7 @@ db.serialize(() => {
     )
   `);
 
-  // Table notes
+  // Table notes (AVEC public_token)
   db.run(`
     CREATE TABLE IF NOT EXISTS notes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,21 +26,24 @@ db.serialize(() => {
       tags TEXT,
       status TEXT DEFAULT 'private',
       user_id INTEGER NOT NULL,
+      public_token TEXT UNIQUE,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users (id)
     )
   `);
 
-  // Table partages
+  // Table partages (NOUVELLE)
   db.run(`
-    CREATE TABLE IF NOT EXISTS shares (
+    CREATE TABLE IF NOT EXISTS note_shares (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       note_id INTEGER NOT NULL,
-      shared_with_user_id INTEGER NOT NULL,
+      shared_with_email TEXT NOT NULL,
+      shared_by_user_id INTEGER NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (note_id) REFERENCES notes (id),
-      FOREIGN KEY (shared_with_user_id) REFERENCES users (id)
+      FOREIGN KEY (shared_by_user_id) REFERENCES users (id),
+      UNIQUE(note_id, shared_with_email)
     )
   `);
 

@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useAuth } from './AuthContext';
+import ShareNote from './ShareNote';
+import { useNotification } from './useNotification';
 
 interface Note {
   id: number;
@@ -10,10 +12,13 @@ interface Note {
   status: 'private' | 'shared' | 'public';
   created_at: string;
   updated_at: string;
+  owner_email?: string;
+  source?: 'own' | 'shared';
 }
 
 const Notes: React.FC = () => {
   const { user, logout } = useAuth();
+  const { showSuccess, showError, NotificationContainer } = useNotification();
   const [notes, setNotes] = useState<Note[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
@@ -21,6 +26,8 @@ const Notes: React.FC = () => {
   const [editingNote, setEditingNote] = useState<Note | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('');
+  const [shareModalNote, setShareModalNote] = useState<number | null>(null);
+  const [previewMode, setPreviewMode] = useState<{[key: string]: boolean}>({});
 
   // Formulaire
   const [formData, setFormData] = useState({
@@ -42,7 +49,7 @@ const Notes: React.FC = () => {
       setNotes(response.data);
       setError('');
     } catch (error: any) {
-      setError('Erreur lors du chargement des notes');
+      showError('Erreur lors du chargement des notes');
       console.error(error);
     } finally {
       setIsLoading(false);
@@ -76,8 +83,9 @@ const Notes: React.FC = () => {
       setEditingNote(null);
       loadNotes();
       setError('');
+      showSuccess(editingNote ? 'Note modifiée avec succès !' : 'Note créée avec succès !');
     } catch (error: any) {
-      setError(error.response?.data?.error || 'Erreur lors de la sauvegarde');
+      showError(error.response?.data?.error || 'Erreur lors de la sauvegarde');
     }
   };
 
@@ -90,8 +98,9 @@ const Notes: React.FC = () => {
     try {
       await axios.delete(`http://localhost:3001/api/notes/${id}`);
       loadNotes();
+      showSuccess('Note supprimée avec succès !');
     } catch (error: any) {
-      setError('Erreur lors de la suppression');
+      showError('Erreur lors de la suppression');
     }
   };
 
@@ -114,6 +123,28 @@ const Notes: React.FC = () => {
     setFormData({ title: '', content: '', tags: '', status: 'private' });
   };
 
+  // Fonction pour rendre le Markdown en HTML simple
+  const renderMarkdown = (text: string) => {
+    if (!text) return '';
+    
+    let html = text
+      // Titres
+      .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+      .replace(/^## (.*$)/gim, '<h2>$1</h2>')
+      .replace(/^# (.*$)/gim, '<h1>$1</h1>')
+      // Gras et italique
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.*?)\*/g, '<em>$1</em>')
+      // Liens
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
+      // Code inline
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      // Saut de ligne
+      .replace(/\n/g, '<br>');
+    
+    return html;
+  };
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'private': return '#6c757d';
@@ -121,6 +152,11 @@ const Notes: React.FC = () => {
       case 'public': return '#28a745';
       default: return '#6c757d';
     }
+  };
+
+  // Vérifier si l'utilisateur peut modifier une note
+  const canEdit = (note: Note) => {
+    return note.source !== 'shared'; // Peut modifier seulement ses propres notes
   };
 
   return (
@@ -245,19 +281,52 @@ const Notes: React.FC = () => {
             </div>
 
             <div style={{ marginBottom: '15px' }}>
-              <label style={{ display: 'block', marginBottom: '5px' }}>Contenu</label>
-              <textarea
-                value={formData.content}
-                onChange={(e) => setFormData({...formData, content: e.target.value})}
-                rows={6}
-                style={{
-                  width: '100%',
-                  padding: '10px',
-                  border: '1px solid #ddd',
-                  borderRadius: '4px',
-                  resize: 'vertical'
-                }}
-              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+                <label>Contenu (Markdown supporté)</label>
+                <button
+                  type="button"
+                  onClick={() => setPreviewMode({...previewMode, form: !previewMode.form})}
+                  style={{
+                    padding: '5px 10px',
+                    background: '#6c757d',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '12px'
+                  }}
+                >
+                  {previewMode.form ? 'Éditer' : 'Aperçu'}
+                </button>
+              </div>
+              
+              {previewMode.form ? (
+                <div
+                  style={{
+                    padding: '10px',
+                    border: '1px solid #ddd',
+                    borderRadius: '4px',
+                    minHeight: '150px',
+                    background: '#f9f9f9'
+                  }}
+                  dangerouslySetInnerHTML={{ __html: renderMarkdown(formData.content) }}
+                />
+              ) : (
+                <textarea
+                  value={formData.content}
+                  onChange={(e) => setFormData({...formData, content: e.target.value})}
+                  rows={6}
+                  placeholder="# Titre principal&#10;## Sous-titre&#10;**Texte en gras** *italique*&#10;`code`&#10;[Lien](http://example.com)"
+                  style={{
+                    width: '100%',
+                    padding: '10px',
+                    border: '1px solid #ddd',
+                    borderRadius: '4px',
+                    resize: 'vertical',
+                    fontFamily: 'monospace'
+                  }}
+                />
+              )}
             </div>
 
             <div style={{ marginBottom: '15px' }}>
@@ -338,45 +407,105 @@ const Notes: React.FC = () => {
           <p>Aucune note trouvée. Créez votre première note !</p>
         </div>
       ) : (
-        <div style={{ display: 'grid', gap: '20px', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }}>
+        <div style={{ display: 'grid', gap: '20px', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))' }}>
           {notes.map((note) => (
             <div key={note.id} style={{ 
               background: 'white', 
               padding: '20px', 
               borderRadius: '8px', 
               boxShadow: '0 2px 10px rgba(0,0,0,0.1)',
-              position: 'relative'
+              position: 'relative',
+              border: note.source === 'shared' ? '2px solid #007bff' : 'none'
             }}>
+              {/* Header de la note */}
               <div style={{ 
                 display: 'flex', 
                 justifyContent: 'space-between', 
                 alignItems: 'flex-start',
                 marginBottom: '10px'
               }}>
-                <h3 style={{ margin: '0 0 10px 0', wordBreak: 'break-word' }}>{note.title}</h3>
+                <h3 style={{ margin: '0 0 10px 0', wordBreak: 'break-word', flex: 1 }}>
+                  {note.title}
+                  {note.source === 'shared' && (
+                    <span style={{ 
+                      fontSize: '12px', 
+                      color: '#007bff',
+                      display: 'block',
+                      fontWeight: 'normal'
+                    }}>
+                      Partagé par: {note.owner_email}
+                    </span>
+                  )}
+                </h3>
                 <span style={{ 
                   background: getStatusColor(note.status),
                   color: 'white',
                   padding: '2px 8px',
                   borderRadius: '12px',
                   fontSize: '12px',
-                  textTransform: 'capitalize'
+                  textTransform: 'capitalize',
+                  whiteSpace: 'nowrap',
+                  marginLeft: '10px'
                 }}>
                   {note.status}
                 </span>
               </div>
               
+              {/* Contenu de la note */}
               {note.content && (
-                <p style={{ 
-                  color: '#666', 
-                  marginBottom: '10px',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word'
-                }}>
-                  {note.content.length > 150 ? `${note.content.substring(0, 150)}...` : note.content}
-                </p>
+                <div style={{ marginBottom: '15px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+                    <span style={{ fontSize: '14px', fontWeight: 'bold' }}>Contenu:</span>
+                    <button
+                      onClick={() => setPreviewMode({...previewMode, [note.id]: !previewMode[note.id]})}
+                      style={{
+                        padding: '2px 8px',
+                        background: '#6c757d',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '10px'
+                      }}
+                    >
+                      {previewMode[note.id] ? 'Brut' : 'Rendu'}
+                    </button>
+                  </div>
+                  
+                  {previewMode[note.id] ? (
+                    <div
+                      style={{
+                        color: '#666',
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                        padding: '10px',
+                        background: '#f9f9f9',
+                        borderRadius: '4px',
+                        maxHeight: '150px',
+                        overflow: 'auto'
+                      }}
+                      dangerouslySetInnerHTML={{ __html: renderMarkdown(note.content) }}
+                    />
+                  ) : (
+                    <p style={{ 
+                      color: '#666', 
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      fontFamily: 'monospace',
+                      fontSize: '13px',
+                      maxHeight: '100px',
+                      overflow: 'auto',
+                      background: '#f9f9f9',
+                      padding: '10px',
+                      borderRadius: '4px'
+                    }}>
+                      {note.content.length > 200 ? `${note.content.substring(0, 200)}...` : note.content}
+                    </p>
+                  )}
+                </div>
               )}
               
+              {/* Tags */}
               {note.tags && (
                 <div style={{ marginBottom: '15px' }}>
                   {note.tags.split(',').map((tag, index) => (
@@ -395,6 +524,7 @@ const Notes: React.FC = () => {
                 </div>
               )}
               
+              {/* Dates */}
               <div style={{ 
                 display: 'flex', 
                 justifyContent: 'space-between', 
@@ -409,43 +539,89 @@ const Notes: React.FC = () => {
                 )}
               </div>
 
-              <div style={{ display: 'flex', gap: '10px' }}>
-                <button
-                  onClick={() => startEdit(note)}
-                  style={{
-                    flex: 1,
-                    padding: '8px',
-                    background: '#007bff',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    fontSize: '14px'
-                  }}
-                >
-                  Modifier
-                </button>
+              {/* Boutons d'action */}
+              <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
+                {canEdit(note) && (
+                  <>
+                    <button
+                      onClick={() => startEdit(note)}
+                      style={{
+                        flex: 1,
+                        padding: '8px',
+                        background: '#007bff',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '14px'
+                      }}
+                    >
+                      Modifier
+                    </button>
+                    
+                    <button
+                      onClick={() => handleDelete(note.id)}
+                      style={{
+                        flex: 1,
+                        padding: '8px',
+                        background: '#dc3545',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '14px'
+                      }}
+                    >
+                      Supprimer
+                    </button>
+
+                    <button
+                      onClick={() => setShareModalNote(note.id)}
+                      style={{
+                        flex: 1,
+                        padding: '8px',
+                        background: '#28a745',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '14px'
+                      }}
+                    >
+                      Partager
+                    </button>
+                  </>
+                )}
                 
-                <button
-                  onClick={() => handleDelete(note.id)}
-                  style={{
-                    flex: 1,
+                {!canEdit(note) && (
+                  <div style={{
+                    width: '100%',
                     padding: '8px',
-                    background: '#dc3545',
-                    color: 'white',
-                    border: 'none',
+                    background: '#e9ecef',
+                    color: '#6c757d',
+                    textAlign: 'center',
                     borderRadius: '4px',
-                    cursor: 'pointer',
                     fontSize: '14px'
-                  }}
-                >
-                  Supprimer
-                </button>
+                  }}>
+                    📖 Lecture seule - Note partagée
+                  </div>
+                )}
               </div>
             </div>
           ))}
         </div>
       )}
+
+      {/* Modal de partage */}
+      {shareModalNote && (
+        <ShareNote
+          noteId={shareModalNote}
+          onClose={() => setShareModalNote(null)}
+        />
+      )}
+
+      {/* Notifications */}
+      <NotificationContainer />
     </div>
   );
 };

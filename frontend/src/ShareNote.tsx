@@ -1,55 +1,57 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
-
-interface Share {
-  id: number;
-  email: string;
-  created_at: string;
-}
 
 interface ShareNoteProps {
   noteId: number;
-  noteTitle: string;
   onClose: () => void;
 }
 
-const ShareNote: React.FC<ShareNoteProps> = ({ noteId, noteTitle, onClose }) => {
-  const [shareEmail, setShareEmail] = useState('');
+interface Share {
+  id: number;
+  shared_with_email: string;
+  created_at: string;
+}
+
+const ShareNote: React.FC<ShareNoteProps> = ({ noteId, onClose }) => {
+  const [email, setEmail] = useState('');
   const [shares, setShares] = useState<Share[]>([]);
-  const [publicUrl, setPublicUrl] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [publicLink, setPublicLink] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
-  // Charger les partages existants
-  useEffect(() => {
-    loadShares();
-  }, [noteId]);
-
-  const loadShares = async () => {
+  // Charger les partages existants (avec useCallback)
+  const loadShares = useCallback(async () => {
     try {
       const response = await axios.get(`http://localhost:3001/api/notes/${noteId}/shares`);
-      setShares(response.data);
+      setShares(response.data.shares);
+      setPublicLink(response.data.publicLink);
     } catch (error: any) {
-      console.error('Erreur lors du chargement des partages:', error);
+      console.error('Erreur chargement partages:', error);
     }
-  };
+  }, [noteId]);
+
+  useEffect(() => {
+    loadShares();
+  }, [loadShares]);
 
   // Partager avec un utilisateur
-  const handleShareWithUser = async (e: React.FormEvent) => {
+  const handleShare = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!email.trim()) {
+      setError('Email requis');
+      return;
+    }
+
+    setIsLoading(true);
     setError('');
     setSuccess('');
-    setIsLoading(true);
 
     try {
-      await axios.post(`http://localhost:3001/api/notes/${noteId}/share`, {
-        sharedWithEmail: shareEmail
-      });
-
-      setSuccess(`Note partagée avec ${shareEmail}`);
-      setShareEmail('');
-      loadShares(); // Recharger la liste
+      await axios.post(`http://localhost:3001/api/notes/${noteId}/share`, { email });
+      setSuccess(`Note partagée avec ${email}`);
+      setEmail('');
+      loadShares();
     } catch (error: any) {
       setError(error.response?.data?.error || 'Erreur lors du partage');
     } finally {
@@ -58,15 +60,16 @@ const ShareNote: React.FC<ShareNoteProps> = ({ noteId, noteTitle, onClose }) => 
   };
 
   // Générer un lien public
-  const handleGeneratePublicLink = async () => {
+  const generatePublicLink = async () => {
+    setIsLoading(true);
     setError('');
     setSuccess('');
-    setIsLoading(true);
 
     try {
       const response = await axios.post(`http://localhost:3001/api/notes/${noteId}/public-link`);
-      setPublicUrl(response.data.publicUrl);
-      setSuccess('Lien public généré !');
+      setPublicLink(response.data.publicLink);
+      setSuccess('Lien public généré avec succès');
+      loadShares();
     } catch (error: any) {
       setError(error.response?.data?.error || 'Erreur lors de la génération du lien');
     } finally {
@@ -74,13 +77,11 @@ const ShareNote: React.FC<ShareNoteProps> = ({ noteId, noteTitle, onClose }) => 
     }
   };
 
-  // Copier le lien dans le presse-papier
-  const copyToClipboard = async () => {
-    try {
-      await navigator.clipboard.writeText(publicUrl);
-      setSuccess('Lien copié dans le presse-papier !');
-    } catch {
-      setError('Impossible de copier le lien');
+  // Copier le lien
+  const copyLink = () => {
+    if (publicLink) {
+      navigator.clipboard.writeText(publicLink);
+      setSuccess('Lien copié dans le presse-papiers');
     }
   };
 
@@ -101,13 +102,13 @@ const ShareNote: React.FC<ShareNoteProps> = ({ noteId, noteTitle, onClose }) => 
         backgroundColor: 'white',
         padding: '30px',
         borderRadius: '8px',
-        maxWidth: '500px',
         width: '90%',
+        maxWidth: '500px',
         maxHeight: '80vh',
         overflow: 'auto'
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <h2>Partager la note: {noteTitle}</h2>
+          <h2>Partager la note</h2>
           <button
             onClick={onClose}
             style={{
@@ -115,7 +116,7 @@ const ShareNote: React.FC<ShareNoteProps> = ({ noteId, noteTitle, onClose }) => 
               border: 'none',
               fontSize: '24px',
               cursor: 'pointer',
-              color: '#999'
+              color: '#666'
             }}
           >
             ×
@@ -124,25 +125,13 @@ const ShareNote: React.FC<ShareNoteProps> = ({ noteId, noteTitle, onClose }) => 
 
         {/* Messages */}
         {error && (
-          <div style={{ 
-            background: '#fee', 
-            color: '#c33', 
-            padding: '10px', 
-            borderRadius: '4px', 
-            marginBottom: '15px' 
-          }}>
+          <div style={{ background: '#fee', color: '#c33', padding: '10px', borderRadius: '4px', marginBottom: '15px' }}>
             {error}
           </div>
         )}
-
+        
         {success && (
-          <div style={{ 
-            background: '#efe', 
-            color: '#363', 
-            padding: '10px', 
-            borderRadius: '4px', 
-            marginBottom: '15px' 
-          }}>
+          <div style={{ background: '#efe', color: '#363', padding: '10px', borderRadius: '4px', marginBottom: '15px' }}>
             {success}
           </div>
         )}
@@ -150,14 +139,13 @@ const ShareNote: React.FC<ShareNoteProps> = ({ noteId, noteTitle, onClose }) => 
         {/* Partage avec un utilisateur */}
         <div style={{ marginBottom: '30px' }}>
           <h3>Partager avec un utilisateur</h3>
-          <form onSubmit={handleShareWithUser}>
-            <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
+          <form onSubmit={handleShare}>
+            <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
               <input
                 type="email"
-                value={shareEmail}
-                onChange={(e) => setShareEmail(e.target.value)}
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 placeholder="Email de l'utilisateur"
-                required
                 style={{
                   flex: 1,
                   padding: '10px',
@@ -178,7 +166,7 @@ const ShareNote: React.FC<ShareNoteProps> = ({ noteId, noteTitle, onClose }) => 
                   opacity: isLoading ? 0.7 : 1
                 }}
               >
-                Partager
+                {isLoading ? 'Partage...' : 'Partager'}
               </button>
             </div>
           </form>
@@ -186,22 +174,23 @@ const ShareNote: React.FC<ShareNoteProps> = ({ noteId, noteTitle, onClose }) => 
           {/* Liste des partages */}
           {shares.length > 0 && (
             <div>
-              <h4>Partagé avec:</h4>
-              <ul style={{ listStyle: 'none', padding: 0 }}>
-                {shares.map((share) => (
-                  <li key={share.id} style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    padding: '8px 0',
-                    borderBottom: '1px solid #eee'
-                  }}>
-                    <span>{share.email}</span>
-                    <span style={{ color: '#666', fontSize: '12px' }}>
-                      {new Date(share.created_at).toLocaleDateString()}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+              <h4>Partagé avec :</h4>
+              {shares.map((share) => (
+                <div key={share.id} style={{
+                  padding: '8px 12px',
+                  background: '#f8f9fa',
+                  borderRadius: '4px',
+                  marginBottom: '5px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center'
+                }}>
+                  <span>{share.shared_with_email}</span>
+                  <small style={{ color: '#666' }}>
+                    {new Date(share.created_at).toLocaleDateString()}
+                  </small>
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -209,65 +198,72 @@ const ShareNote: React.FC<ShareNoteProps> = ({ noteId, noteTitle, onClose }) => 
         {/* Lien public */}
         <div>
           <h3>Lien public</h3>
-          <p style={{ color: '#666', fontSize: '14px', marginBottom: '15px' }}>
-            Générez un lien public pour que n'importe qui puisse voir cette note.
-          </p>
-          
-          {!publicUrl ? (
-            <button
-              onClick={handleGeneratePublicLink}
-              disabled={isLoading}
-              style={{
-                padding: '10px 20px',
-                background: '#28a745',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: isLoading ? 'not-allowed' : 'pointer',
-                opacity: isLoading ? 0.7 : 1
-              }}
-            >
-              Générer un lien public
-            </button>
-          ) : (
+          {publicLink ? (
             <div>
               <div style={{
-                display: 'flex',
-                gap: '10px',
-                alignItems: 'center',
-                marginBottom: '10px'
+                padding: '10px',
+                background: '#f8f9fa',
+                border: '1px solid #ddd',
+                borderRadius: '4px',
+                marginBottom: '10px',
+                wordBreak: 'break-all',
+                fontSize: '14px'
               }}>
-                <input
-                  type="text"
-                  value={publicUrl}
-                  readOnly
-                  style={{
-                    flex: 1,
-                    padding: '10px',
-                    border: '1px solid #ddd',
-                    borderRadius: '4px',
-                    backgroundColor: '#f8f9fa'
-                  }}
-                />
-                <button
-                  onClick={copyToClipboard}
-                  style={{
-                    padding: '10px 15px',
-                    background: '#6c757d',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer'
-                  }}
-                >
-                  Copier
-                </button>
+                {publicLink}
               </div>
-              <p style={{ color: '#666', fontSize: '12px' }}>
-                ⚠️ Attention: Cette note est maintenant publique et accessible à tous avec ce lien.
+              <button
+                onClick={copyLink}
+                style={{
+                  padding: '8px 16px',
+                  background: '#28a745',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer'
+                }}
+              >
+                Copier le lien
+              </button>
+            </div>
+          ) : (
+            <div>
+              <p style={{ color: '#666', marginBottom: '10px' }}>
+                Aucun lien public généré pour cette note.
               </p>
+              <button
+                onClick={generatePublicLink}
+                disabled={isLoading}
+                style={{
+                  padding: '10px 20px',
+                  background: '#ffc107',
+                  color: '#212529',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: isLoading ? 'not-allowed' : 'pointer',
+                  opacity: isLoading ? 0.7 : 1
+                }}
+              >
+                {isLoading ? 'Génération...' : 'Générer un lien public'}
+              </button>
             </div>
           )}
+        </div>
+
+        {/* Bouton fermer */}
+        <div style={{ marginTop: '30px', textAlign: 'center' }}>
+          <button
+            onClick={onClose}
+            style={{
+              padding: '10px 30px',
+              background: '#6c757d',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer'
+            }}
+          >
+            Fermer
+          </button>
         </div>
       </div>
     </div>
