@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - JWT_SECRET=ae82dc47b5cc98159e9646f480dc7ff640ad667f89516915976a73dbe82442fd17f2600835a70f0f61356e0823905948212833a5d8b99debcfd4c6c485bb0545
+    volumes:
+      - ./backend/notes.db:/app/notes.db
+    networks:
+      - notes-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - notes-network
+    restart: unless-stopped
+
+networks:
+  notes-network:
+    driver: bridge
+
+volumes:
+  notes-data:
