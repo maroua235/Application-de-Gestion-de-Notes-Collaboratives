@@ -210,17 +210,17 @@ docker-compose up --build
 # Inscription
 curl -X POST http://localhost:3001/api/auth/register \
   -H "Content-Type: application/json" \
-  -d '{"email":"test@example.com","password":"123456"}'
+  -d '{"email":"test@test.com","password":"123456"}'
 
 # Connexion
 curl -X POST http://localhost:3001/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"test@example.com","password":"123456"}'
+  -d '{"email":"test@test.com","password":"123456"}'
 ```
 
 #### Gestion des Notes
 ```bash
-# Créer une note (remplacez TOKEN par votre JWT)
+# Créer une note 
 curl -X POST http://localhost:3001/api/notes \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer TOKEN" \
@@ -246,7 +246,7 @@ curl -X GET "http://localhost:3001/api/notes?search=markdown&status=private" \
 curl -X POST http://localhost:3001/api/notes/1/share \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer TOKEN" \
-  -d '{"email":"ami@example.com"}'
+  -d '{"email":"maroua@exemple.com"}'
 
 # Générer un lien public
 curl -X POST http://localhost:3001/api/notes/1/public-link \
@@ -315,7 +315,7 @@ sqlite3 backend/notes.db "SELECT * FROM users;"
 
 ## Conformité au Cahier des Charges
 
-### Version 2 (Node.js + React.js) - 100% Conforme
+### Version 2 (Node.js + React.js) 
 
 **Backend :**
 - Node.js avec Express.js
